@@ -109,6 +109,8 @@ class VPT_ViT(VisionTransformer):
 def get_model(version="vit_base_patch16_clip_224.laion2b_ft_in12k_in1k", Prompt_Token_num=1, VPT_type="Deep"):
     model = timm.create_model(version, pretrained=True)
     vpt_model = VPT_ViT(Prompt_Token_num=Prompt_Token_num, VPT_type=VPT_type)
+    vpt_model.load_state_dict(model.state_dict(), False)
+    vpt_model.Freeze()
     return vpt_model
 if __name__ == "__main__":
     vpt_model = get_model()
