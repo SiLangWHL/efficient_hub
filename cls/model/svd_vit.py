@@ -48,7 +48,9 @@ class svdMlp(nn.Module):
     def svd_forward(self, x, w, b):
         u, s, v = torch.svd(w)
         w_svd = torch.mm(torch.mm(u.detach(), torch.diag(s)), v.detach().t())
-        x = torch.matmul(x, w_svd.T) + b.unsqueeze(0)
+        x = torch.matmul(x, w_svd.T) 
+        if b is not None:
+            x += b.unsqueeze(0)
         return x
     def forward(self, x):
         #print("this is svd_mlp ", x.size())
@@ -61,7 +63,7 @@ class svdMlp(nn.Module):
         x = self.svd_forward(x, self.fc2.weight, self.fc2.bias) if self.training else self.fc2(x)
         x = self.drop2(x)
         return x
-class svdAttention(VisionTransformer):
+class svdAttention(nn.Module):
     fused_attn: Final[bool]
 
     def __init__(
@@ -88,17 +90,19 @@ class svdAttention(VisionTransformer):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def svd_forward(self, x, w):
+    def svd_forward(self, x, w, b):
         u, s, v = torch.svd(w)
         w_svd = torch.mm(torch.mm(u.detach(), torch.diag(s)), v.detach().t())
-        x = torch.matmul(x, w_svd.T)
+        x = torch.matmul(x, w_svd.T) 
+        if b is not None:
+            x += b.unsqueeze(0)
         return x
     
     def forward(self, x):
         #print("this is svd attention", x.size(), self.qkv.in_features)
         B, N, C = x.shape
         #qkv = self.qkv(x)
-        qkv = self.svd_forward(x, self.qkv.weight) if self.training else self.qkv(x)
+        qkv = self.svd_forward(x, self.qkv.weight, self.qkv.bias) if self.training else self.qkv(x)
         qkv = qkv.reshape(B, N, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         q, k = self.q_norm(q), self.k_norm(k)
@@ -114,7 +118,7 @@ class svdAttention(VisionTransformer):
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = attn @ v
-
+ 
         x = x.transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
@@ -122,22 +126,27 @@ class svdAttention(VisionTransformer):
     
 class SVD_ViT(VisionTransformer):
     def __init__(self,):
-        super(SVD_ViT, self).__init__()
-        # Here, we do the surgery
+        super(SVD_ViT, self).__init__(pre_norm=True)  # if you want to load CLIP ViT, please set pre_norm=True; otherwise set pr_norm=False
         for t_layer_i, blk in enumerate(self.blocks):
-            num_heads = self.blocks[t_layer_i].attn.num_heads
-            dim = self.blocks[t_layer_i].attn.qkv.in_features
-            self.blocks[t_layer_i].attn = svdAttention(dim=dim, num_heads=num_heads)
-            in_features, hidden_features, out_features = self.blocks[t_layer_i].mlp.fc1.in_features, self.blocks[t_layer_i].mlp.fc1.out_features, self.blocks[t_layer_i].mlp.fc2.out_features
-            self.blocks[t_layer_i].mlp = svdMlp(in_features, hidden_features, out_features)
-class ViT(VisionTransformer):
+            
+            num_heads, dim = blk.attn.num_heads, blk.attn.qkv.in_features
+            bias = True if blk.attn.qkv.bias is not None else False
+            self.blocks[t_layer_i].attn = svdAttention(dim=dim, num_heads=num_heads, qkv_bias=bias)
+            
+            in_features, hidden_features, out_features = blk.mlp.fc1.in_features, blk.mlp.fc1.out_features, blk.mlp.fc2.out_features
+            bias = True if blk.mlp.fc1.bias is not None else False
+            self.blocks[t_layer_i].mlp = svdMlp(in_features, hidden_features, out_features, bias=bias)
+            
+        self.head = nn.Identity()
+class ViT(VisionTransformer): # if you want to load CLIP ViT, please set pre_norm=True; otherwise set pre_norm=False
     def __init__(self,):
-        super(ViT, self).__init__()
+        super(ViT, self).__init__(pre_norm=True) 
+        self.head = nn.Identity()
             
 def get_model(version="vit_base_patch16_clip_224.laion2b_ft_in12k_in1k"):
-    model = timm.create_model(version, pretrained=True)
+    model_pretrain = timm.create_model(version, pretrained=True)
     model = SVD_ViT()
-    model.load_state_dict(model.state_dict(), True)
+    model.load_state_dict(model_pretrain.state_dict(), False)
     return model
 
 if __name__ == "__main__":  # Debug
