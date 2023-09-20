@@ -7,7 +7,7 @@ from timm.models.vision_transformer import VisionTransformer, PatchEmbed
 class VPT_ViT(VisionTransformer):
     def __init__(self, Prompt_Token_num=1,
                  VPT_type="Shallow", basic_state_dict=None):
-        super().__init__()
+        super().__init__(pre_norm=True)   # if you want to load CLIP ViT, please set pre_norm=True; otherwise set pr_norm=False
 
         # load basic state_dict
         if basic_state_dict is not None:
